@@ -188,7 +188,7 @@ class RWKV_RNN(MyModule):
         xk = x + sx * time_maa_k
         xr = x + sx * time_maa_r
         state[i0] = x #保存当前最后一个混合后的token，留待与下一个新token重新进行混合
-        r = torch.sigmoid(rw @ xr) #sigmoid 归一化，r可以理解门控单元
+        r = torch.sigmoid(rw @ xr) #sigmoid 归一化操作，类似于 linear attention的q
         k = torch.square(torch.relu(kw @ xk)) # square relu, primer paper
         return r * (vw @ k) #kv运算并通过遗忘门r
 
@@ -201,11 +201,11 @@ class RWKV_RNN(MyModule):
         sx = state[i1] - x #经典的token_shift 将相邻两个token的通道进行混合
         state[i1] = x #保存当前最后一个混合后的token，留待与下一个新token重新进行混合
         xxx = x + sx * x_maa #使用可学习参数计算（time_maa控制sx权重）
-        # data-dependent 这里使用了两个lora矩阵tm_w1，tm_w2进行矩阵乘
+        # （data-dependent 根据当前tokens计算得到）这里使用了两个lora矩阵tm_w1，tm_w2进行矩阵乘
         xxx = torch.tanh(xxx @ tm_w1).view(5, 1, -1)
         xxx = torch.bmm(xxx, tm_w2).view(5, -1)
-        mw, mk, mv, mr, mg = xxx.unbind(dim=0) #lora矩阵中的5*对应wkvrg 5个参数，所以这里通过unbind分出各自的特征
-        #使用可学习参数*并与x相加（time_maa控制sx权重）
+        mw, mk, mv, mr, mg = xxx.unbind(dim=0) #lora矩阵中的5*对应wkvrg 5个参数，所以这里通过unbind分出5个mw, mk, mv, mr, mg （data-dependent参数）
+        # linear interpolation 线性插值这里分别使用不同的maa可以更好的区分xw、xk、xv、xr、xg特征
         xw = x + sx * (w_maa + mw)
         xk = x + sx * (k_maa + mk)
         xv = x + sx * (v_maa + mv)
@@ -213,12 +213,12 @@ class RWKV_RNN(MyModule):
         xg = x + sx * (g_maa + mg)
 
         w = (time_decay + (torch.tanh(xw @ td_w1) @ td_w2).float()).view(H, S, 1) # data-dependent-decay 根据当前token计算出不同位置的decay（rwkv5的w没有T维度，缺少data-dependent）
-        w = torch.exp(-torch.exp(w.float())) #exp的存在，为了保证数值稳定性 最终w的范围会被控制在0-1
+        w = torch.exp(-torch.exp(w.float())) #exp(-exp(x)) 类似于 sigmoid和tanh的作用，但是计算梯度更简单。为了保证数值稳定性 最终w的范围会被控制在0-1
 
         #分别与各自的可学习参数进行计算得到rkvg，并进行view以便后续计算
-        r = (rw @ xr).view(H, 1, S) #r类似于遗忘门
-        k = (kw @ xk).view(H, S, 1)
-        v = (vw @ xv).view(H, 1, S)
+        r = (rw @ xr).view(H, 1, S) #类似于 linear attention的q
+        k = (kw @ xk).view(H, S, 1)#类似于 linear attention的k
+        v = (vw @ xv).view(H, 1, S)#类似于 linear attention的v
         g = F.silu(gw @ xg) #g类似于输出门
 
         s = state[(2+S)*i+2:(2+S)*(i+1), :].reshape(H, S, S)#获取对应位置的state并调整维度以便计算
@@ -226,7 +226,7 @@ class RWKV_RNN(MyModule):
         x = torch.zeros(H, S) #创建一个为0的tensor用于存储结果
         a = k @ v #计算kv，transformer系列需要保留kv cache，而rwkv只需要计算当前kv
         x = r @ (time_first * a + s) #经过r门控单元得到x输出（time_first * a 的time_first决定kv中重要的特征的去留）
-        s = a + w * s #计算当前state，a为当前kv，s为历史state（w*s的w决定历史state中重要的特征的去留，与遗忘门原理类似）
+        s = a + w * s #计算当前state，a为当前kv，右边的s为历史state（w*s的w决定历史state中重要的特征的去留，与遗忘门原理类似）
     
         state[(2+S)*i+2:(2+S)*(i+1), :] = s.reshape(S, -1) #存储最后一个state信息，以便下一个token的计算
         x = x.flatten() #展平x，以便后续group_norm计算
