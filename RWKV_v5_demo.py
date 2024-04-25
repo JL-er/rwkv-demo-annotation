@@ -184,7 +184,7 @@ class RWKV_RNN(MyModule):
     @MyFunction
     def channel_mixing(self, x, state, i:int, time_mix_k, time_mix_r, kw, vw, rw):
         i0 = (2+self.head_size)*i+0 #获取前文channel-mixing的最后一个token特征的位置（state[i0]取出），i为对应层数
-        # linear interpolation 线性插值,同时实现了相邻两个token的通道混合（token_shift）
+        # linear interpolation 线性插值,通过将当前输入与前一时刻输入做线性插值实现了相邻两个token的通道混合（token_shift）
         xk = x * time_mix_k + state[i0] * (1 - time_mix_k)
         xr = x * time_mix_r + state[i0] * (1 - time_mix_r)
         state[i0] = x #保存当前最后一个token，留待与下一个新token重新进行混合
@@ -198,7 +198,7 @@ class RWKV_RNN(MyModule):
         S = self.head_size
 
         i1 = (2+S)*i+1  #获取前文time-mixing的最后一个token特征的位置（state[i0]取出），i为对应层数
-        # linear interpolation 线性插值,同时实现了相邻两个token的通道混合（token_shift）
+        # linear interpolation 线性插值,通过将当前输入与前一时刻输入做线性插值实现了相邻两个token的通道混合（token_shift）
         xk = x * time_mix_k + state[i1] * (1 - time_mix_k)
         xv = x * time_mix_v + state[i1] * (1 - time_mix_v)
         xr = x * time_mix_r + state[i1] * (1 - time_mix_r)
